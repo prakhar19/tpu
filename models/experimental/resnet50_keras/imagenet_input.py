@@ -59,16 +59,22 @@ class ImageNetInput(object):
       https://github.com/tensorflow/tpu/blob/master/tools/datasets/imagenet_to_gcs.py
 
   Args:
-    is_training: `bool` for whether the input is for training
+    is_training: `bool` for whether the input is for training.
     data_dir: `str` for the directory of the training and validation data;
         if 'null' (the literal string 'null', not None), then construct a null
         pipeline, consisting of empty images.
+    use_bfloat16: If True, use bfloat16 precision; else use float32.
     per_core_batch_size: The per-TPU-core batch size to use.
   """
 
-  def __init__(self, is_training, data_dir, per_core_batch_size=128):
+  def __init__(self,
+               is_training,
+               data_dir,
+               use_bfloat16=False,
+               per_core_batch_size=128):
     self.image_preprocessing_fn = resnet_preprocessing.preprocess_image
     self.is_training = is_training
+    self.use_bfloat16 = use_bfloat16
     self.data_dir = data_dir
     if self.data_dir == 'null' or self.data_dir == '':
       self.data_dir = None
@@ -103,7 +109,7 @@ class ImageNetInput(object):
     image = self.image_preprocessing_fn(
         image_bytes=image_bytes,
         is_training=self.is_training,
-        use_bfloat16=False)
+        use_bfloat16=self.use_bfloat16)
 
     # Subtract one so that labels are in [0, 1000), and cast to float32 for
     # Keras model.
@@ -139,8 +145,9 @@ class ImageNetInput(object):
     # Read the data from disk in parallel
     dataset = dataset.apply(
         tf.contrib.data.parallel_interleave(
-            fetch_dataset, cycle_length=16, sloppy=True))
-    dataset = dataset.shuffle(1024)
+            fetch_dataset, cycle_length=16, sloppy=self.is_training))
+    if self.is_training:
+      dataset = dataset.shuffle(1024)
 
     # Parse, pre-process, and batch the data in parallel
     dataset = dataset.apply(
@@ -153,16 +160,16 @@ class ImageNetInput(object):
     dataset = dataset.prefetch(tf.contrib.data.AUTOTUNE)
     return dataset
 
-  # TODO(xiejw): Remove this generator once evaluation with dataset is ready.
-  def evaluation_generator(self, master):
+  # TODO(xiejw): Remove this generator when we have support for top_k
+  # evaluation.
+  def evaluation_generator(self, sess):
     """Creates a generator for evaluation."""
     next_batch = self.input_fn().make_one_shot_iterator().get_next()
-    with tf.Session(master) as sess:
-      while True:
-        try:
-          yield sess.run(next_batch)
-        except tf.errors.OutOfRangeError:
-          return
+    while True:
+      try:
+        yield sess.run(next_batch)
+      except tf.errors.OutOfRangeError:
+        return
 
   def input_fn_null(self):
     """Input function which provides null (black) images."""

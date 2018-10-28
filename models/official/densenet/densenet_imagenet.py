@@ -22,6 +22,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os
+from absl import app
 from absl import flags
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
@@ -230,8 +231,7 @@ class ImageNetInput(object):
 
     dataset = dataset.map(self.dataset_parser, num_parallel_calls=128)
     dataset = dataset.prefetch(batch_size)
-    dataset = dataset.apply(
-        tf.contrib.data.batch_and_drop_remainder(batch_size))
+    dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(2)  # Prefetch overlaps in-feed with training
     return dataset
 
@@ -411,4 +411,4 @@ def main(unused_argv):
 
 if __name__ == "__main__":
   tf.logging.set_verbosity(tf.logging.INFO)
-  tf.app.run()
+  app.run(main)

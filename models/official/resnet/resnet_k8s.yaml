@@ -23,15 +23,15 @@ spec:
     metadata:
       annotations:
         # The Cloud TPUs that will be created for this Job must support
-        # TensorFlow 1.10. This version MUST match the TensorFlow version that
+        # TensorFlow 1.11. This version MUST match the TensorFlow version that
         # your model is built on.
-        tf-version.cloud-tpus.google.com: "1.10"
+        tf-version.cloud-tpus.google.com: "1.11"
     spec:
       restartPolicy: Never
       containers:
       - name: resnet-tpu
-        # The official TensorFlow 1.10 TPU model image built from https://github.com/tensorflow/tpu/blob/r1.10/tools/docker/Dockerfile.
-        image: gcr.io/tensorflow/tpu-models:r1.10
+        # The official TensorFlow 1.11 TPU model image built from https://github.com/tensorflow/tpu/blob/r1.11/tools/docker/Dockerfile.
+        image: gcr.io/tensorflow/tpu-models:r1.11
         command:
         - python
         - /tensorflow_tpu_models/models/official/resnet/resnet_main.py
@@ -46,6 +46,9 @@ spec:
           # output model will be stored.
         - name: MODEL_BUCKET
           value: "gs://<my-model-bucket>/resnet"
+          # Point PYTHONPATH to the top level models folder
+        - name: PYTHONPATH
+          value: "/tensorflow_tpu_models/models"
         resources:
           limits:
             # Request a single v2-8 Cloud TPU device to train the model.

@@ -24,6 +24,7 @@ import re
 import sys
 import time
 
+from absl import app
 from absl import flags
 
 import tensorflow as tf
@@ -31,8 +32,8 @@ import tensorflow as tf
 # For Cloud environment, add parent directory for imports
 sys.path.append(os.path.dirname(os.path.abspath(sys.path[0])))
 
-import imagenet_input    # pylint: disable=g-import-not-at-top
-import resnet_main
+from official.resnet import imagenet_input    # pylint: disable=g-import-not-at-top
+from official.resnet import resnet_main
 from tensorflow.python.estimator import estimator
 
 
@@ -56,6 +57,7 @@ flags.DEFINE_bool(
 # Number of training and evaluation images in the standard ImageNet dataset
 NUM_TRAIN_IMAGES = 1281167
 NUM_EVAL_IMAGES = 50000
+
 
 def main(unused_argv):
   tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
@@ -146,13 +148,18 @@ def main(unused_argv):
         f.write(str(start_timestamp))
 
     if FLAGS.use_fast_lr:
+      small_steps = int(18 * NUM_TRAIN_IMAGES / FLAGS.train_batch_size)
+      normal_steps = int(41 * NUM_TRAIN_IMAGES / FLAGS.train_batch_size)
+      large_steps = int(min(50 * NUM_TRAIN_IMAGES / FLAGS.train_batch_size,
+                            FLAGS.train_steps))
+
       resnet_classifier.train(
-          input_fn=imagenet_train_small.input_fn, max_steps=18 * 1251)
+          input_fn=imagenet_train_small.input_fn, max_steps=small_steps)
       resnet_classifier.train(
-          input_fn=imagenet_train.input_fn, max_steps=41 * 1251)
+          input_fn=imagenet_train.input_fn, max_steps=normal_steps)
       resnet_classifier.train(
           input_fn=imagenet_train_large.input_fn,
-          max_steps=min(50 * 1251, FLAGS.train_steps))
+          max_steps=large_steps)
     else:
       resnet_classifier.train(
           input_fn=imagenet_train.input_fn, max_steps=FLAGS.train_steps)
@@ -219,4 +226,4 @@ def main(unused_argv):
 
 if __name__ == '__main__':
   tf.logging.set_verbosity(tf.logging.INFO)
-  tf.app.run()
+  app.run(main)

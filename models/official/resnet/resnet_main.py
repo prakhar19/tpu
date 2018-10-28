@@ -21,15 +21,19 @@ from __future__ import print_function
 import os
 import time
 
+from absl import app
 from absl import flags
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
-import imagenet_input
-import lars_util
-import resnet_model
+from official.resnet import imagenet_input
+from official.resnet import lars_util
+from official.resnet import resnet_model
 from tensorflow.contrib import summary
+from tensorflow.contrib.tpu.python.tpu import async_checkpoint
 from tensorflow.contrib.training.python.training import evaluation
+from tensorflow.core.protobuf import rewriter_config_pb2
 from tensorflow.python.estimator import estimator
+
 
 FLAGS = flags.FLAGS
 
@@ -195,6 +199,10 @@ flags.DEFINE_float(
     'weight_decay', default=1e-4,
     help=('Weight decay coefficiant for l2 regularization.'))
 
+flags.DEFINE_float(
+    'label_smoothing', default=0.0,
+    help=('Label smoothing parameter used in the softmax_cross_entropy'))
+
 flags.DEFINE_integer('log_step_count_steps', 64, 'The number of steps at '
                      'which the global step information is logged.')
 
@@ -204,6 +212,12 @@ flags.DEFINE_bool('enable_lars',
 
 flags.DEFINE_float('poly_rate', default=0.0,
                    help=('Set LARS/Poly learning rate.'))
+
+flags.DEFINE_bool(
+    'use_cache', default=True, help=('Enable cache for training input.'))
+
+flags.DEFINE_bool(
+    'use_async_checkpointing', default=False, help=('Enable async checkpoint'))
 
 # Learning rate schedule
 LR_SCHEDULE = [    # (multiplier, epoch to start) tuples
@@ -312,7 +326,7 @@ def resnet_model_fn(features, labels, mode, params):
   cross_entropy = tf.losses.softmax_cross_entropy(
       logits=logits,
       onehot_labels=one_hot_labels,
-      label_smoothing=0.1)
+      label_smoothing=FLAGS.label_smoothing)
 
   # Add weight decay to the loss for non-batch-normalization variables.
   loss = cross_entropy + FLAGS.weight_decay * tf.add_n(
@@ -500,15 +514,24 @@ def main(unused_argv):
       zone=FLAGS.tpu_zone,
       project=FLAGS.gcp_project)
 
+  if FLAGS.use_async_checkpointing:
+    save_checkpoints_steps = None
+  else:
+    save_checkpoints_steps = max(100, FLAGS.iterations_per_loop)
   config = tf.contrib.tpu.RunConfig(
       cluster=tpu_cluster_resolver,
       model_dir=FLAGS.model_dir,
-      save_checkpoints_steps=max(600, FLAGS.iterations_per_loop),
+      save_checkpoints_steps=save_checkpoints_steps,
       log_step_count_steps=FLAGS.log_step_count_steps,
+      session_config=tf.ConfigProto(
+          graph_options=tf.GraphOptions(
+              rewrite_options=rewriter_config_pb2.RewriterConfig(
+                  disable_meta_optimizer=True))),
       tpu_config=tf.contrib.tpu.TPUConfig(
           iterations_per_loop=FLAGS.iterations_per_loop,
           num_shards=FLAGS.num_cores,
-          per_host_input_for_training=tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2))  # pylint: disable=line-too-long
+          per_host_input_for_training=tf.contrib.tpu.InputPipelineConfig
+          .PER_HOST_V2))  # pylint: disable=line-too-long
 
   resnet_classifier = tf.contrib.tpu.TPUEstimator(
       use_tpu=FLAGS.use_tpu,
@@ -539,12 +562,15 @@ def main(unused_argv):
       tf.logging.info('Using fake dataset.')
     else:
       tf.logging.info('Using dataset: %s', FLAGS.data_dir)
-    imagenet_train, imagenet_eval = [imagenet_input.ImageNetInput(
-        is_training=is_training,
-        data_dir=FLAGS.data_dir,
-        transpose_input=FLAGS.transpose_input,
-        num_parallel_calls=FLAGS.num_parallel_calls,
-        use_bfloat16=use_bfloat16) for is_training in [True, False]]
+    imagenet_train, imagenet_eval = [
+        imagenet_input.ImageNetInput(
+            is_training=is_training,
+            data_dir=FLAGS.data_dir,
+            transpose_input=FLAGS.transpose_input,
+            cache=FLAGS.use_cache and is_training,
+            num_parallel_calls=FLAGS.num_parallel_calls,
+            use_bfloat16=use_bfloat16) for is_training in [True, False]
+    ]
 
   steps_per_epoch = FLAGS.num_train_images // FLAGS.train_batch_size
   eval_steps = FLAGS.num_eval_images // FLAGS.eval_batch_size
@@ -593,8 +619,16 @@ def main(unused_argv):
     start_timestamp = time.time()  # This time will include compilation time
 
     if FLAGS.mode == 'train':
+      hooks = []
+      if FLAGS.use_async_checkpointing:
+        hooks.append(
+            async_checkpoint.AsyncCheckpointSaverHook(
+                checkpoint_dir=FLAGS.model_dir,
+                save_steps=max(100, FLAGS.iterations_per_loop)))
       resnet_classifier.train(
-          input_fn=imagenet_train.input_fn, max_steps=FLAGS.train_steps)
+          input_fn=imagenet_train.input_fn,
+          max_steps=FLAGS.train_steps,
+          hooks=hooks)
 
     else:
       assert FLAGS.mode == 'train_and_eval'
@@ -636,4 +670,4 @@ def main(unused_argv):
 
 if __name__ == '__main__':
   tf.logging.set_verbosity(tf.logging.INFO)
-  tf.app.run()
+  app.run(main)

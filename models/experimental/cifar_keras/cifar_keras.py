@@ -18,6 +18,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from absl import app
 from absl import flags
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
@@ -124,9 +125,7 @@ def input_fn(params):
   dataset = tf.data.TFRecordDataset([FLAGS.train_file])
   dataset = dataset.map(parser, num_parallel_calls=batch_size)
   dataset = dataset.prefetch(4 * batch_size).cache().repeat()
-  dataset = dataset.apply(
-      tf.contrib.data.batch_and_drop_remainder(FLAGS.batch_size)
-  )
+  dataset = dataset.batch(FLAGS.batch_size, drop_remainder=True)
   dataset = dataset.prefetch(1)
   return dataset
 
@@ -160,4 +159,4 @@ def main(argv):
 
 if __name__ == "__main__":
   tf.logging.set_verbosity(tf.logging.INFO)
-  tf.app.run(main)
+  app.run(main)
